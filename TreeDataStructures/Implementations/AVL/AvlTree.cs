@@ -6,6 +6,9 @@ namespace TreeDataStructures.Implementations.AVL;
 public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<TKey, TValue>>
     where TKey : IComparable<TKey>
 {
+    private bool _isRemoving = false;
+    private AvlNode<TKey, TValue>? _rebalanceStart = null;
+
     protected override AvlNode<TKey, TValue> CreateNode(TKey key, TValue value)
         => new(key, value);
     
@@ -17,7 +20,26 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
 
     protected override void OnNodeRemoved(AvlNode<TKey, TValue>? parent, AvlNode<TKey, TValue>? child)
     {
-        RebalanceUp(parent as AvlNode<TKey, TValue>);
+        if (_isRemoving)
+        {
+            _rebalanceStart = parent;
+        }
+    }
+
+    public override bool Remove(TKey key)
+    {
+        _isRemoving = true;
+        _rebalanceStart = null;
+        
+        bool result = base.Remove(key);
+        
+        _isRemoving = false;
+        if (_rebalanceStart != null)
+        {
+            RebalanceUp(_rebalanceStart);
+        }
+        
+        return result;
     }
 
     private static int HeightOf(AvlNode<TKey, TValue>? node) => node?.Height ?? 0;
