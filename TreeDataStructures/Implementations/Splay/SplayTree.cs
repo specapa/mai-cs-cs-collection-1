@@ -4,29 +4,25 @@ using TreeDataStructures.Implementations.BST;
 namespace TreeDataStructures.Implementations.Splay;
 
 public class SplayTree<TKey, TValue> : BinarySearchTree<TKey, TValue>
+    where TKey : IComparable<TKey>
 {
     protected override BstNode<TKey, TValue> CreateNode(TKey key, TValue value)
         => new(key, value);
     
     protected override void OnNodeAdded(BstNode<TKey, TValue> newNode)
     {
-        // Splay the newly added node to the root
         Splay(newNode);
     }
     
     protected override void OnNodeRemoved(BstNode<TKey, TValue>? parent, BstNode<TKey, TValue>? child)
     {
-        // After removal, splay the parent if present, otherwise splay the child
         if (parent != null) Splay(parent);
         else if (child != null) Splay(child);
     }
     
     public override bool TryGetValue(TKey key, [MaybeNullWhen(false)] out TValue value)
     {
-        var node = typeof(BinarySearchTree<TKey, TValue>)
-            .GetMethod("FindNode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            ?.Invoke(this, new object[] { key }) as BstNode<TKey, TValue>;
-
+        var node = FindNode(key);
         if (node != null)
         {
             Splay(node);
@@ -40,10 +36,7 @@ public class SplayTree<TKey, TValue> : BinarySearchTree<TKey, TValue>
 
     public override bool ContainsKey(TKey key)
     {
-        var node = typeof(BinarySearchTree<TKey, TValue>)
-            .GetMethod("FindNode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            ?.Invoke(this, new object[] { key }) as BstNode<TKey, TValue>;
-
+        var node = FindNode(key);
         if (node != null)
         {
             Splay(node);

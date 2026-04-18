@@ -14,7 +14,7 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
     
     protected override void OnNodeAdded(AvlNode<TKey, TValue> newNode)
     {
-        var node = newNode.Parent as AvlNode<TKey, TValue>;
+        var node = newNode.Parent;
         RebalanceUp(node);
     }
 
@@ -46,7 +46,7 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
 
     private static void RecomputeHeight(AvlNode<TKey, TValue> node)
     {
-        node.Height = Math.Max(HeightOf(node.Left as AvlNode<TKey, TValue>), HeightOf(node.Right as AvlNode<TKey, TValue>)) + 1;
+        node.Height = Math.Max(HeightOf(node.Left), HeightOf(node.Right)) + 1;
     }
 
     private void RebalanceUp(AvlNode<TKey, TValue>? start)
@@ -55,17 +55,16 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
         while (node != null)
         {
             RecomputeHeight(node);
-            int balance = HeightOf(node.Left as AvlNode<TKey, TValue>) - HeightOf(node.Right as AvlNode<TKey, TValue>);
+            int balance = HeightOf(node.Left) - HeightOf(node.Right);
 
             if (balance > 1)
             {
-                var left = node.Left as AvlNode<TKey, TValue>;
-                if (left != null && HeightOf(left.Left as AvlNode<TKey, TValue>) >= HeightOf(left.Right as AvlNode<TKey, TValue>))
+                var left = node.Left;
+                if (left != null && HeightOf(left.Left) >= HeightOf(left.Right))
                 {
                     // Right rotation
                     RotateRight(node);
-                    // update heights
-                    var parent = node.Parent as AvlNode<TKey, TValue>;
+                    var parent = node.Parent;
                     RecomputeHeight(node);
                     if (parent != null) RecomputeHeight(parent);
                     node = parent;
@@ -77,7 +76,7 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
                     if (left != null)
                         RotateLeft(left);
                     RotateRight(node);
-                    var parent = node.Parent as AvlNode<TKey, TValue>;
+                    var parent = node.Parent;
                     RecomputeHeight(node);
                     if (parent != null) RecomputeHeight(parent);
                     node = parent;
@@ -86,12 +85,12 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
             }
             else if (balance < -1)
             {
-                var right = node.Right as AvlNode<TKey, TValue>;
-                if (right != null && HeightOf(right.Right as AvlNode<TKey, TValue>) >= HeightOf(right.Left as AvlNode<TKey, TValue>))
+                var right = node.Right;
+                if (right != null && HeightOf(right.Right) >= HeightOf(right.Left))
                 {
                     // Left rotation
                     RotateLeft(node);
-                    var parent = node.Parent as AvlNode<TKey, TValue>;
+                    var parent = node.Parent;
                     RecomputeHeight(node);
                     if (parent != null) RecomputeHeight(parent);
                     node = parent;
@@ -103,7 +102,7 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
                     if (right != null)
                         RotateRight(right);
                     RotateLeft(node);
-                    var parent = node.Parent as AvlNode<TKey, TValue>;
+                    var parent = node.Parent;
                     RecomputeHeight(node);
                     if (parent != null) RecomputeHeight(parent);
                     node = parent;
@@ -111,7 +110,7 @@ public class AvlTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, AvlNode<
                 }
             }
 
-            node = node.Parent as AvlNode<TKey, TValue>;
+            node = node.Parent;
         }
     }
 
