@@ -22,7 +22,7 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
             var gp = p.Parent;
             if (gp == null) break;
 
-            if (p == gp.Left)
+            if (p.IsLeftChild)
             {
                 var y = gp.Right;
                 if (y != null && y.Color == RbColor.Red)
@@ -34,15 +34,15 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
                 }
                 else
                 {
-                    if (z == p.Right)
+                    if (z.IsRightChild)
                     {
                         z = p;
                         RotateLeft(z);
-                        p = z.Parent;
+                        p = z.Parent!;
                         gp = p?.Parent;
                     }
 
-                    p = z.Parent;
+                    p = z.Parent!;
                     if (p != null)
                         p.Color = RbColor.Black;
                     if (p?.Parent is RbNode<TKey, TValue> gpp)
@@ -64,15 +64,15 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
                 }
                 else
                 {
-                    if (z == p.Left)
+                    if (z.IsLeftChild)
                     {
                         z = p;
                         RotateRight(z);
-                        p = z.Parent;
+                        p = z.Parent!;
                         gp = p?.Parent;
                     }
 
-                    p = z.Parent;
+                    p = z.Parent!;
                     if (p != null)
                         p.Color = RbColor.Black;
                     if (p?.Parent is RbNode<TKey, TValue> gpp)
@@ -100,7 +100,7 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
         RbNode<TKey, TValue>? y = z;
         var yOriginalColor = y.Color;
         RbNode<TKey, TValue>? x;
-        RbNode<TKey, TValue>? xParent = null;
+        RbNode<TKey, TValue>? xParent;
 
         if (z.Left == null)
         {
@@ -158,7 +158,8 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
         {
             if (xParent == null) break;
 
-            if (x == xParent.Left)
+            bool xIsLeft = x != null ? x.IsLeftChild : xParent.Left == null;
+            if (xIsLeft)
             {
                 var w = xParent.Right;
                 if (w != null && w.Color == RbColor.Red)

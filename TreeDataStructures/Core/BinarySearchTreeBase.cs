@@ -274,10 +274,10 @@ public abstract class BinarySearchTreeBase<TKey, TValue, TNode>(IComparer<TKey>?
         new TreeIterator(Root, TraversalStrategy.InOrderReverse);
 
     public IEnumerable<TreeEntry<TKey, TValue>> PreOrderReverse() =>
-        new TreeIterator(Root, TraversalStrategy.PreOrderReverse);
+        new TreeIterator(Root, TraversalStrategy.PostOrderReverse);
 
     public IEnumerable<TreeEntry<TKey, TValue>> PostOrderReverse() =>
-        new TreeIterator(Root, TraversalStrategy.PostOrderReverse);
+        new TreeIterator(Root, TraversalStrategy.PreOrderReverse);
 
     /// <summary>
     /// Внутренний класс-итератор. 
