@@ -2,7 +2,7 @@
 
 namespace Arithmetic.BigInt.MultiplyStrategy;
 
-// Умножение «в столбик»: O(n*m), базовый алгоритм для небольших чисел
+// Умножение в столбик: O(n*m), базовый алгоритм для небольших чисел
 internal class SimpleMultiplier : IMultiplier
 {
     public BetterBigInteger Multiply(BetterBigInteger a, BetterBigInteger b)
