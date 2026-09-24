@@ -9,87 +9,47 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
         ArgumentNullException.ThrowIfNull(key, nameof(key));
         return new RbNode<TKey, TValue>(key, value);
     }
-    
+
     protected override void OnNodeAdded(RbNode<TKey, TValue> newNode)
     {
-
         var z = newNode;
-
         z.Color = RbColor.Red;
 
-        while (z.Parent is RbNode<TKey, TValue> p && p.Color == RbColor.Red)
+        while (z.Parent is { Color: RbColor.Red } p)
         {
             var gp = p.Parent;
             if (gp == null) break;
 
-            if (p.IsLeftChild)
-            {
-                var y = gp.Right;
-                if (y != null && y.Color == RbColor.Red)
-                {
-                    p.Color = RbColor.Black;
-                    y.Color = RbColor.Black;
-                    gp.Color = RbColor.Red;
-                    z = gp;
-                }
-                else
-                {
-                    if (z.IsRightChild)
-                    {
-                        z = p;
-                        RotateLeft(z);
-                        p = z.Parent!;
-                        gp = p?.Parent;
-                    }
+            bool parentIsLeft = p.IsLeftChild;
+            var uncle = parentIsLeft ? gp.Right : gp.Left;
 
-                    p = z.Parent!;
-                    if (p != null)
-                        p.Color = RbColor.Black;
-                    if (p?.Parent is RbNode<TKey, TValue> gpp)
-                    {
-                        gpp.Color = RbColor.Red;
-                        RotateRight(gpp);
-                    }
-                }
-            }
-            else
+            // Случай 1: дядя красный — перекраска и подъём
+            if (uncle is { Color: RbColor.Red })
             {
-                var y = gp.Left;
-                if (y != null && y.Color == RbColor.Red)
-                {
-                    p.Color = RbColor.Black;
-                    y.Color = RbColor.Black;
-                    gp.Color = RbColor.Red;
-                    z = gp;
-                }
-                else
-                {
-                    if (z.IsLeftChild)
-                    {
-                        z = p;
-                        RotateRight(z);
-                        p = z.Parent!;
-                        gp = p?.Parent;
-                    }
-
-                    p = z.Parent!;
-                    if (p != null)
-                        p.Color = RbColor.Black;
-                    if (p?.Parent is RbNode<TKey, TValue> gpp)
-                    {
-                        gpp.Color = RbColor.Red;
-                        RotateLeft(gpp);
-                    }
-                }
+                p.Color = RbColor.Black;
+                uncle.Color = RbColor.Black;
+                gp.Color = RbColor.Red;
+                z = gp;
+                continue;
             }
+
+            // Случай 2: «ломаная» линия — выравниваем вращением
+            if (parentIsLeft != z.IsLeftChild)
+            {
+                z = p;
+                if (parentIsLeft) RotateLeft(z); else RotateRight(z);
+                p = z.Parent!;
+                gp = p.Parent!;
+            }
+
+            // Случай 3: прямая линия — вращение вокруг деда
+            p.Color = RbColor.Black;
+            gp.Color = RbColor.Red;
+            if (parentIsLeft) RotateRight(gp); else RotateLeft(gp);
         }
 
-        if (Root is RbNode<TKey, TValue> rootNode)
-            rootNode.Color = RbColor.Black;
-    }
-    protected override void OnNodeRemoved(RbNode<TKey, TValue>? parent, RbNode<TKey, TValue>? child)
-    {
-
+        if (Root != null)
+            Root.Color = RbColor.Black;
     }
 
     public override bool Remove(TKey key)
@@ -97,140 +57,104 @@ public class RedBlackTree<TKey, TValue> : BinarySearchTreeBase<TKey, TValue, RbN
         var z = FindNode(key);
         if (z == null) return false;
 
-        RbNode<TKey, TValue>? y = z;
+        var y = z;
         var yOriginalColor = y.Color;
         RbNode<TKey, TValue>? x;
         RbNode<TKey, TValue>? xParent;
 
-        if (z.Left == null)
+        if (z.Left == null || z.Right == null)
         {
-            x = z.Right;
+            // 0–1 ребёнок: просто подставляем
+            x = z.Left ?? z.Right;
             xParent = z.Parent;
-            Transplant(z, z.Right);
-        }
-        else if (z.Right == null)
-        {
-            x = z.Left;
-            xParent = z.Parent;
-            Transplant(z, z.Left);
+            Transplant(z, x);
         }
         else
         {
+            // 2 ребёнка: заменяем на преемника (min справа)
             y = z.Right;
             while (y.Left != null)
                 y = y.Left;
 
             yOriginalColor = y.Color;
             x = y.Right;
+            xParent = y.Parent == z ? y : y.Parent;
 
-            if (y.Parent == z)
+            if (y.Parent != z)
             {
-                xParent = y;
-                if (x != null) x.Parent = y;
-            }
-            else
-            {
-                xParent = y.Parent;
                 Transplant(y, y.Right);
                 y.Right = z.Right;
-                if (y.Right != null) y.Right.Parent = y;
+                y.Right.Parent = y;
             }
 
             Transplant(z, y);
             y.Left = z.Left;
-            if (y.Left != null) y.Left.Parent = y;
+            y.Left.Parent = y;
             y.Color = z.Color;
         }
 
         Count--;
 
+        // Чёрный узел убрали — могли нарушить «чёрную высоту»
         if (yOriginalColor == RbColor.Black)
-        {
             DeleteFixup(x, xParent);
-        }
 
         return true;
     }
 
+    private static bool IsBlack(RbNode<TKey, TValue>? node) =>
+        node == null || node.Color == RbColor.Black;
+
+    // x — узел (или NIL), который занял место удалённого чёрного; несёт «двойную черноту»
     private void DeleteFixup(RbNode<TKey, TValue>? x, RbNode<TKey, TValue>? xParent)
     {
-        while ((x == null || x.Color == RbColor.Black) && x != Root)
+        while (IsBlack(x) && x != Root)
         {
             if (xParent == null) break;
 
-            bool xIsLeft = x != null ? x.IsLeftChild : xParent.Left == null;
-            if (xIsLeft)
+            bool xIsLeft = x == xParent.Left;
+            var w = xIsLeft ? xParent.Right : xParent.Left;
+            if (w == null) break;
+
+            // Случай 1: брат красный → делаем его чёрным, родителя красным, вращаем
+            if (w.Color == RbColor.Red)
             {
-                var w = xParent.Right;
-                if (w != null && w.Color == RbColor.Red)
-                {
-                    w.Color = RbColor.Black;
-                    xParent.Color = RbColor.Red;
-                    RotateLeft(xParent);
-                    w = xParent.Right;
-                }
-
-                if ((w?.Left == null || (w!.Left)!.Color == RbColor.Black) &&
-                    (w?.Right == null || (w!.Right)!.Color == RbColor.Black))
-                {
-                    if (w != null) w.Color = RbColor.Red;
-                    x = xParent;
-                    xParent = x.Parent;
-                }
-                else
-                {
-                    if (w?.Right == null || (w!.Right)!.Color == RbColor.Black)
-                    {
-                        if (w?.Left is RbNode<TKey, TValue> wl) wl.Color = RbColor.Black;
-                        if (w != null) w.Color = RbColor.Red;
-                        if (w != null) RotateRight(w);
-                        w = xParent.Right;
-                    }
-
-                    if (w != null) w.Color = xParent.Color;
-                    xParent.Color = RbColor.Black;
-                    if (w?.Right is RbNode<TKey, TValue> wr) wr.Color = RbColor.Black;
-                    RotateLeft(xParent);
-                    x = Root;
-                    break;
-                }
+                w.Color = RbColor.Black;
+                xParent.Color = RbColor.Red;
+                if (xIsLeft) RotateLeft(xParent); else RotateRight(xParent);
+                w = xIsLeft ? xParent.Right : xParent.Left;
+                if (w == null) break;
             }
-            else
+
+            var near = xIsLeft ? w.Left : w.Right; // ребёнок брата ближе к x
+            var far = xIsLeft ? w.Right : w.Left;  // ребёнок брата дальше от x
+
+            // Случай 2: оба ребёнка брата чёрные → переносим «дефицит» на родителя
+            if (IsBlack(near) && IsBlack(far))
             {
-                var w = xParent.Left;
-                if (w != null && w.Color == RbColor.Red)
-                {
-                    w.Color = RbColor.Black;
-                    xParent.Color = RbColor.Red;
-                    RotateRight(xParent);
-                    w = xParent.Left;
-                }
-
-                if ((w?.Right == null || w!.Right!.Color == RbColor.Black) &&
-                    (w?.Left == null || w!.Left!.Color == RbColor.Black))
-                {
-                    if (w != null) w.Color = RbColor.Red;
-                    x = xParent;
-                    xParent = x.Parent;
-                }
-                else
-                {
-                    if (w?.Left == null || w!.Left.Color == RbColor.Black)
-                    {
-                        if (w?.Right is RbNode<TKey, TValue> wr) wr.Color = RbColor.Black;
-                        if (w != null) w.Color = RbColor.Red;
-                        if (w != null) RotateLeft(w);
-                        w = xParent.Left;
-                    }
-
-                    if (w != null) w.Color = xParent.Color;
-                    xParent.Color = RbColor.Black;
-                    if (w?.Left is RbNode<TKey, TValue> wl) wl.Color = RbColor.Black;
-                    RotateRight(xParent);
-                    x = Root;
-                    break;
-                }
+                w.Color = RbColor.Red;
+                x = xParent;
+                xParent = x.Parent;
+                continue;
             }
+
+            // Случай 3: дальний ребёнок чёрный → вращаем брата, сводим к случаю 4
+            if (IsBlack(far))
+            {
+                if (near != null) near.Color = RbColor.Black;
+                w.Color = RbColor.Red;
+                if (xIsLeft) RotateRight(w); else RotateLeft(w);
+                w = (xIsLeft ? xParent.Right : xParent.Left)!;
+                far = xIsLeft ? w.Right : w.Left;
+            }
+
+            // Случай 4: дальний ребёнок красный → финальное вращение, конец
+            w.Color = xParent.Color;
+            xParent.Color = RbColor.Black;
+            if (far != null) far.Color = RbColor.Black;
+            if (xIsLeft) RotateLeft(xParent); else RotateRight(xParent);
+            x = Root;
+            break;
         }
 
         if (x != null)

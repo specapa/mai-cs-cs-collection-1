@@ -1,5 +1,5 @@
-﻿using System.Globalization;
-using System.Numerics;
+﻿using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text;
 using Arithmetic.BigInt.Interfaces;
 using Arithmetic.BigInt.MultiplyStrategy;
@@ -88,8 +88,16 @@ public sealed class BetterBigInteger : IBigInteger
 
     #region Сравнение и равенство
 
-    // Возвращает модуль числа (без знака), с учётом оптимизации для значений в в слово
-    public ReadOnlySpan<uint> GetDigits() => _data ?? [_smallValue];
+    // Модуль числа. Одно слово отдаём без выделения массива.
+    public ReadOnlySpan<uint> GetDigits()
+    {
+        if (_data is not null)
+        {
+            return _data;
+        }
+
+        return MemoryMarshal.CreateReadOnlySpan(ref _smallValue, 1);
+    }
 
     public int CompareTo(IBigInteger? other)
     {
@@ -276,22 +284,23 @@ public sealed class BetterBigInteger : IBigInteger
         int digitShift = shift / 32;
         int bitShift = shift % 32;
         ReadOnlySpan<uint> data = a.GetDigits();
-        uint[] newData = new uint[data.Length + digitShift + 1];
 
+        if (bitShift == 0)
+        {
+            uint[] moved = new uint[data.Length + digitShift];
+            data.CopyTo(moved.AsSpan(digitShift));
+            return FromMagnitude(moved, a.IsNegative);
+        }
+
+        uint[] newData = new uint[data.Length + digitShift + 1];
         uint carry = 0;
         for (int i = 0; i < data.Length; i++)
         {
-            uint tmpCarry = data[i] >> (32 - bitShift);
-            uint newValue = (data[i] << bitShift) | carry;
-            carry = tmpCarry == data[i] ? 0u : tmpCarry;
-            newData[i + digitShift] = newValue;
+            newData[i + digitShift] = (data[i] << bitShift) | carry;
+            carry = data[i] >> (32 - bitShift);
         }
 
-        if (carry != 0)
-        {
-            newData[^1] = carry;
-        }
-
+        newData[^1] = carry;
         return FromMagnitude(newData, a.IsNegative);
     }
 
@@ -439,6 +448,11 @@ public sealed class BetterBigInteger : IBigInteger
 
     internal static uint[] NormalizeLittleEndian(uint[] digits)
     {
+        if (digits.Length == 0)
+        {
+            return [0];
+        }
+
         // Убираем лишние нулевые старшие разряды
         int length = digits.Length;
         while (length > 1 && digits[length - 1] == 0)
@@ -458,13 +472,14 @@ public sealed class BetterBigInteger : IBigInteger
 
     internal static int CompareMagnitude(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
-        if (a.Length != b.Length)
+        int aLength = SignificantLength(a);
+        int bLength = SignificantLength(b);
+        if (aLength != bLength)
         {
-            return a.Length.CompareTo(b.Length);
+            return aLength.CompareTo(bLength);
         }
 
-        // Сравниваем с старших разрядов (little-endian: с конца массива)
-        for (int i = a.Length - 1; i >= 0; i--)
+        for (int i = aLength - 1; i >= 0; i--)
         {
             if (a[i] != b[i])
             {
@@ -475,32 +490,124 @@ public sealed class BetterBigInteger : IBigInteger
         return 0;
     }
 
+    private static int SignificantLength(ReadOnlySpan<uint> digits)
+    {
+        int length = digits.Length;
+        while (length > 0 && digits[length - 1] == 0)
+        {
+            length--;
+        }
+
+        return length;
+    }
+
+    private static uint AddLimb(uint left, uint right, out uint carry)
+    {
+        uint sum = left + right;
+        carry = sum < left ? 1u : 0u;
+        return sum;
+    }
+
+    private static uint AddLimb(uint left, uint right, uint incoming, out uint carry)
+    {
+        uint sum = AddLimb(left, right, out uint first);
+        sum = AddLimb(sum, incoming, out uint second);
+        carry = first + second;
+        return sum;
+    }
+
+    // 32×32 → младшие и старшие 32 бита произведения. Промежуточные произведения — по 16 бит.
+    private static void MultiplyFull(uint left, uint right, out uint low, out uint high)
+    {
+        uint leftLow = left & 0xFFFF;
+        uint leftHigh = left >> 16;
+        uint rightLow = right & 0xFFFF;
+        uint rightHigh = right >> 16;
+
+        uint p00 = leftLow * rightLow;
+        uint p01 = leftLow * rightHigh;
+        uint p10 = leftHigh * rightLow;
+        uint p11 = leftHigh * rightHigh;
+
+        uint middle = (p00 >> 16) + (p01 & 0xFFFF) + (p10 & 0xFFFF);
+        low = (p00 & 0xFFFF) | (middle << 16);
+        high = p11 + (p01 >> 16) + (p10 >> 16) + (middle >> 16);
+    }
+
+    // floor(2^32 / divisor). divisor >= 2, результат помещается в uint.
+    private static uint DivideTwoTo32(uint divisor)
+    {
+        uint quotient = uint.MaxValue / divisor;
+        if (uint.MaxValue % divisor == divisor - 1)
+        {
+            quotient++;
+        }
+
+        return quotient;
+    }
+
+    // (high:low) / divisor при high < divisor. Частное помещается в uint.
+    private static uint DivMod64By32(uint high, uint low, uint divisor, out uint remainder)
+    {
+        if (divisor == 0)
+        {
+            throw new DivideByZeroException();
+        }
+
+        if (high >= divisor)
+        {
+            throw new OverflowException("64-bit quotient does not fit in uint.");
+        }
+
+        remainder = high;
+        uint quotient = 0;
+        for (int bit = 31; bit >= 0; bit--)
+        {
+            uint nextBit = (low >> bit) & 1u;
+            bool overflow = (remainder & 0x80000000u) != 0;
+            remainder = (remainder << 1) | nextBit;
+            if (overflow || remainder >= divisor)
+            {
+                remainder -= divisor;
+                quotient |= 1u << bit;
+            }
+        }
+
+        return quotient;
+    }
+
+    private static bool ProductExceeds(uint left, uint right, uint boundHigh, uint boundLow)
+    {
+        MultiplyFull(left, right, out uint low, out uint high);
+        if (high != boundHigh)
+        {
+            return high > boundHigh;
+        }
+
+        return low > boundLow;
+    }
+
     internal static uint[] AddMagnitudes(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
         int length = Math.Max(a.Length, b.Length);
+        if (length == 0)
+        {
+            return [0];
+        }
+
         uint[] result = new uint[length + 1];
-        ulong carry = 0;
+        uint carry = 0;
 
         for (int i = 0; i < length; i++)
         {
-            ulong sum = carry;
-            if (i < a.Length)
-            {
-                sum += a[i];
-            }
-
-            if (i < b.Length)
-            {
-                sum += b[i];
-            }
-
-            result[i] = (uint)sum;
-            carry = sum >> 32; // перенос в следующий разряд
+            uint left = i < a.Length ? a[i] : 0;
+            uint right = i < b.Length ? b[i] : 0;
+            result[i] = AddLimb(left, right, carry, out carry);
         }
 
         if (carry != 0)
         {
-            result[length] = (uint)carry;
+            result[length] = carry;
         }
 
         return NormalizeLittleEndian(result);
@@ -509,17 +616,7 @@ public sealed class BetterBigInteger : IBigInteger
     // Вычитание модулей: a >= b (проверяется вызывающим кодом)
     internal static uint[] SubtractMagnitudes(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
-        uint[] result = new uint[a.Length];
-        ulong borrow = 0;
-
-        for (int i = 0; i < a.Length; i++)
-        {
-            ulong subtrahend = i < b.Length ? b[i] : 0;
-            ulong diff = a[i] - subtrahend - borrow;
-            result[i] = (uint)diff;
-            borrow = (diff >> 32) & 1;
-        }
-
+        (uint[] result, _) = SubtractMagnitudesChecked(a, b);
         return NormalizeLittleEndian(result);
     }
 
@@ -527,14 +624,17 @@ public sealed class BetterBigInteger : IBigInteger
     internal static (uint[] Result, bool Borrow) SubtractMagnitudesChecked(ReadOnlySpan<uint> a, ReadOnlySpan<uint> b)
     {
         uint[] result = new uint[a.Length];
-        ulong borrow = 0;
+        uint borrow = 0;
 
         for (int i = 0; i < a.Length; i++)
         {
-            ulong subtrahend = i < b.Length ? b[i] : 0;
-            ulong diff = a[i] - subtrahend - borrow;
-            result[i] = (uint)diff;
-            borrow = (diff >> 32) & 1;
+            uint subtrahend = i < b.Length ? b[i] : 0;
+            uint withBorrow = a[i] - borrow;
+            uint borrowedFromValue = borrow > a[i] ? 1u : 0u;
+            uint diff = withBorrow - subtrahend;
+            uint borrowedForSub = withBorrow < subtrahend ? 1u : 0u;
+            result[i] = diff;
+            borrow = borrowedFromValue | borrowedForSub;
         }
 
         return (result, borrow != 0);
@@ -543,24 +643,24 @@ public sealed class BetterBigInteger : IBigInteger
     // Умножение модуля на одну цифру
     internal static uint[] MultiplyMagnitudeByDigit(ReadOnlySpan<uint> magnitude, uint digit)
     {
-        if (digit == 0)
+        if (digit == 0 || magnitude.IsEmpty)
         {
             return [0];
         }
 
         uint[] result = new uint[magnitude.Length + 1];
-        ulong carry = 0;
+        uint carry = 0;
 
         for (int i = 0; i < magnitude.Length; i++)
         {
-            ulong product = (ulong)magnitude[i] * digit + carry;
-            result[i] = (uint)product;
-            carry = product >> 32;
+            MultiplyFull(magnitude[i], digit, out uint low, out uint high);
+            result[i] = AddLimb(low, carry, out uint extra);
+            carry = high + extra;
         }
 
         if (carry != 0)
         {
-            result[magnitude.Length] = (uint)carry;
+            result[magnitude.Length] = carry;
         }
 
         return NormalizeLittleEndian(result);
@@ -575,17 +675,14 @@ public sealed class BetterBigInteger : IBigInteger
 
     private static void AddMagnitudesInPlace(uint[] buffer, int offset, ReadOnlySpan<uint> addend)
     {
-        uint[] sum = AddMagnitudes(buffer.AsSpan(offset, addend.Length), addend);
-
+        uint carry = 0;
         for (int i = 0; i < addend.Length; i++)
         {
-            buffer[offset + i] = i < sum.Length ? sum[i] : 0;
+            buffer[offset + i] = AddLimb(buffer[offset + i], addend[i], carry, out carry);
         }
 
-        if (sum.Length > addend.Length)
-        {
-            buffer[offset + addend.Length] += sum[addend.Length];
-        }
+        // Перенос попадает в старшее слово окна и гасит предыдущий заём.
+        buffer[offset + addend.Length] += carry;
     }
 
     // Деление модулей, возвращает частное и остаток
@@ -593,35 +690,40 @@ public sealed class BetterBigInteger : IBigInteger
     ReadOnlySpan<uint> dividend,
     ReadOnlySpan<uint> divisor)
     {
-        // Деление на 0 запрещено
-        if (IsZeroMagnitude(divisor))
+        dividend = dividend[..SignificantLength(dividend)];
+        divisor = divisor[..SignificantLength(divisor)];
+
+        if (divisor.IsEmpty)
         {
             throw new DivideByZeroException();
         }
 
-        // Если делитель больше делимого
-        // меньшее / большее = 0 остаток x
+        if (dividend.IsEmpty)
+        {
+            return ([0], [0]);
+        }
+
+        // Если делитель больше делимого: меньшее / большее = 0, остаток — делимое
         if (CompareMagnitude(dividend, divisor) < 0)
         {
             return ([0], NormalizeLittleEndian(dividend.ToArray()));
         }
 
-        // Деление на одно слово (на uint)
+        // Деление на одно слово
         if (divisor.Length == 1)
         {
             return DivModBySingleDigit(dividend, divisor[0]);
         }
 
-        // Алгоритм Кнута, основание 2^32
-
-        // D1 нормализация — старшая цифра делителя >= b/2 (2^31)
-        uint divisorHigh = divisor[divisor.Length - 1];
+        // Алгоритм Кнута, основание 2^32.
+        // D1: нормализация — старшая цифра делителя >= 2^31
+        uint divisorHigh = divisor[^1];
         uint d = 1;
         ReadOnlySpan<uint> normalizedDivisor = divisor;
 
-        if (divisorHigh < (1U << 31))
+        if (divisorHigh < 0x80000000u)
         {
-            d = (uint)((1UL << 32) / (divisorHigh + 1UL));
+            d = DivideTwoTo32(divisorHigh + 1);
             normalizedDivisor = MultiplyMagnitudeByDigit(divisor, d);
         }
 
@@ -639,35 +741,42 @@ public sealed class BetterBigInteger : IBigInteger
         uint[] quotient = new uint[quotientLength];
 
         divisorHigh = normalizedDivisor[normalizedDivisorLength - 1];
-        ulong divisorSecond = normalizedDivisorLength > 1 ? normalizedDivisor[normalizedDivisorLength - 2] : 0;
+        uint divisorSecond = normalizedDivisorLength > 1 ? normalizedDivisor[normalizedDivisorLength - 2] : 0;
 
-        // D2–D7 вычисляем цифры частного начиная со старшего
+        // D2–D7: цифры частного со старшей
         for (int j = quotientLength - 1; j >= 0; j--)
         {
-            ulong numeratorHigh = remainder[j + normalizedDivisorLength];
-            ulong numeratorMid = remainder[j + normalizedDivisorLength - 1];
-            ulong numeratorLow = j + normalizedDivisorLength >= 2 ? remainder[j + normalizedDivisorLength - 2] : 0;
+            uint numeratorHigh = remainder[j + normalizedDivisorLength];
+            uint numeratorMid = remainder[j + normalizedDivisorLength - 1];
+            uint numeratorLow = j + normalizedDivisorLength >= 2 ? remainder[j + normalizedDivisorLength - 2] : 0;
 
-            ulong qHat = numeratorHigh == divisorHigh
-                ? uint.MaxValue
-                : ((numeratorHigh << 32) + numeratorMid) / divisorHigh;
+            uint qHat;
+            uint rHat;
+            if (numeratorHigh == divisorHigh)
+            {
+                qHat = uint.MaxValue;
+                rHat = numeratorMid % divisorHigh;
+            }
+            else
+            {
+                qHat = DivMod64By32(numeratorHigh, numeratorMid, divisorHigh, out rHat);
+            }
 
-            ulong rHat = ((numeratorHigh << 32) + numeratorMid) % divisorHigh;
-
-            while (
-                qHat == uint.MaxValue + 1UL || qHat * divisorSecond > (rHat << 32) + numeratorLow)
+            while (ProductExceeds(qHat, divisorSecond, rHat, numeratorLow))
             {
                 qHat--;
-                rHat += divisorHigh;
-                if (rHat >= 1UL << 32)
+                uint grown = rHat + divisorHigh;
+                if (grown < rHat)
                 {
                     break;
                 }
+
+                rHat = grown;
             }
 
             int windowLength = normalizedDivisorLength + 1;
             uint[] window = remainder.AsSpan(j, windowLength).ToArray();
-            uint[] product = MultiplyMagnitudeByDigit(normalizedDivisor, (uint)qHat);
+            uint[] product = MultiplyMagnitudeByDigit(normalizedDivisor, qHat);
             (uint[] newWindow, bool underflow) = SubtractMagnitudesChecked(
                 window,
                 PadMagnitude(product, windowLength));
@@ -680,14 +789,14 @@ public sealed class BetterBigInteger : IBigInteger
                 AddMagnitudesInPlace(remainder, j, normalizedDivisor);
             }
 
-            quotient[j] = (uint)qHat;
+            quotient[j] = qHat;
         }
 
-        // D8: денормализация остатка (делим на d)
+        // D8: остаток масштабирован на d, частное от деления на d — исходный остаток
         uint[] finalRemainder = remainder.AsSpan(0, normalizedDivisorLength).ToArray();
         if (d > 1)
         {
-            (_, finalRemainder) = DivModBySingleDigit(finalRemainder, d);
+            (finalRemainder, _) = DivModBySingleDigit(finalRemainder, d);
         }
 
         return (
@@ -708,9 +817,9 @@ public sealed class BetterBigInteger : IBigInteger
         bool isZero = IsZeroMagnitude(digits);
         _signBit = isZero ? 0 : isNegative ? 1 : 0;
 
-        if (digits.Length == 1)
+        if (digits.Length <= 1)
         {
-            _smallValue = digits[0];
+            _smallValue = digits.Length == 0 ? 0 : digits[0];
             _data = null;
             return;
         }
@@ -790,40 +899,41 @@ public sealed class BetterBigInteger : IBigInteger
     private static char DigitToChar(uint digit) =>
         digit < 10 ? (char)('0' + digit) : (char)('A' + digit - 10);
 
-    // result = result * multiplier + addend, всё за один проход
+    // result = result * multiplier + addend
     private static void MultiplyAndAdd(List<uint> digits, uint multiplier, uint addend)
     {
-        ulong carry = addend;
+        uint carry = addend;
 
         for (int i = 0; i < digits.Count; i++)
         {
-            carry += (ulong)digits[i] * multiplier;
-            digits[i] = (uint)carry;
-            carry >>= 32;
+            MultiplyFull(digits[i], multiplier, out uint low, out uint high);
+            digits[i] = AddLimb(low, carry, out uint extra);
+            carry = high + extra;
         }
 
-        while (carry != 0)
+        if (carry != 0)
         {
-            digits.Add((uint)carry);
-            carry >>= 32;
+            digits.Add(carry);
         }
     }
 
-    // Быстрое деление, когда делитель — одно 32-битное число
+    // Деление, когда делитель — одно 32-битное число
     private static (uint[] quotient, uint[] remainder) DivModBySingleDigit(ReadOnlySpan<uint> dividend, uint divisor)
     {
-        uint[] quotient = new uint[dividend.Length];
-        ulong remainder = 0;
-
-        // Идём от старших разрядов к младшим
-        for (int i = dividend.Length - 1; i >= 0; i--)
+        if (divisor == 0)
         {
-            ulong current = (remainder << 32) | dividend[i];
-            quotient[i] = (uint)(current / divisor);
-            remainder = current % divisor;
+            throw new DivideByZeroException();
         }
 
-        return (NormalizeLittleEndian(quotient), [(uint)remainder]);
+        uint[] quotient = new uint[dividend.Length];
+        uint remainder = 0;
+
+        for (int i = dividend.Length - 1; i >= 0; i--)
+        {
+            quotient[i] = DivMod64By32(remainder, dividend[i], divisor, out remainder);
+        }
+
+        return (NormalizeLittleEndian(quotient), [remainder]);
     }
 
     #endregion

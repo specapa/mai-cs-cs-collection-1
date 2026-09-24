@@ -124,35 +124,28 @@ internal class FftMultiplier : IMultiplier
         return Reduce64(high, low, mod);
     }
 
-    // Приведение 64-битного числа (high:low) по модулю mod
+    // (high * 2^32 + low) mod mod. Старшее слово сначала приводим, иначе деление high/mod задваивает вклад.
     private static uint Reduce64(uint high, uint low, uint mod)
     {
-        if (mod == 1)
+        if (mod <= 1)
         {
             return 0;
         }
 
-        while (high != 0 || low >= mod)
+        high %= mod;
+        low %= mod;
+        if (high == 0)
         {
-            if (high == 0)
-            {
-                return low % mod;
-            }
-
-            uint quotient = high % mod;
-            high /= mod;
-
-            // quotient * 2^32 ≡ quotient * (2^32 mod mod) (mod mod)
-            uint shifted = quotient;
-            for (int i = 0; i < 32; i++)
-            {
-                shifted = AddMod(shifted, shifted, mod);
-            }
-
-            low = AddMod(low, shifted, mod);
+            return low;
         }
 
-        return low;
+        uint shifted = high;
+        for (int i = 0; i < 32; i++)
+        {
+            shifted = AddMod(shifted, shifted, mod);
+        }
+
+        return AddMod(low, shifted, mod);
     }
 
     // Быстрое возведение в степень по модулю
@@ -349,50 +342,25 @@ internal class FftMultiplier : IMultiplier
         return (low, high);
     }
 
-    // Собираем байты из CRT-чанков, нормализуем переносы и упаковываем в цифры
+    // Собираем байты из CRT-чанков: каждый коэффициент — один байт полинома, перенос уходит в следующие.
     private static BetterBigInteger ConvertToBigInteger(uint[] chunks, int resultLength, bool isNegative)
     {
-        List<uint> bytes = [];
-        uint carry = 0;
+        List<uint> bytes = new(resultLength);
+        uint word0 = 0;
+        uint word1 = 0;
+        uint word2 = 0;
 
         for (int i = 0; i < resultLength; i++)
         {
-            uint low = chunks[3 * i];
-            uint mid = chunks[3 * i + 1];
-            uint high = chunks[3 * i + 2];
-
-            // Разворачиваем 96-битный чанк в поток байт с учётом переноса
-            low += carry;
-            if (low < carry)
-            {
-                mid++;
-                if (mid == 0)
-                {
-                    high++;
-                }
-            }
-
-            bytes.Add(low & 0xFF);
-
-            carry = (low >> 8) | (mid << 24);
-            mid = (mid >> 8) | (high << 24);
-            high >>= 8;
-
-            while (mid != 0 || high != 0)
-            {
-                low = carry;
-                bytes.Add(low & 0xFF);
-
-                carry = (low >> 8) | (mid << 24);
-                mid = (mid >> 8) | (high << 24);
-                high >>= 8;
-            }
+            Add96(ref word0, ref word1, ref word2, chunks[3 * i], chunks[3 * i + 1], chunks[3 * i + 2]);
+            bytes.Add(word0 & 0xFF);
+            ShiftRight8(ref word0, ref word1, ref word2);
         }
 
-        while (carry != 0)
+        while (word0 != 0 || word1 != 0 || word2 != 0)
         {
-            bytes.Add(carry & 0xFF);
-            carry >>= 8;
+            bytes.Add(word0 & 0xFF);
+            ShiftRight8(ref word0, ref word1, ref word2);
         }
 
         // Упаковываем байты обратно в 32-битные цифры
@@ -415,5 +383,25 @@ internal class FftMultiplier : IMultiplier
         Array.Copy(digits, trimmed, length);
 
         return new BetterBigInteger(trimmed, isNegative);
+    }
+
+    private static void Add96(ref uint word0, ref uint word1, ref uint word2, uint add0, uint add1, uint add2)
+    {
+        uint carry = AddWithCarry(ref word0, add0);
+        uint carryMid = AddWithCarry(ref word1, add1);
+        carryMid += AddWithCarry(ref word1, carry);
+        uint carryHigh = AddWithCarry(ref word2, add2);
+        carryHigh += AddWithCarry(ref word2, carryMid);
+        if (carryHigh != 0)
+        {
+            throw new OverflowException("CRT coefficient does not fit in 96 bits.");
+        }
+    }
+
+    private static void ShiftRight8(ref uint word0, ref uint word1, ref uint word2)
+    {
+        word0 = (word0 >> 8) | (word1 << 24);
+        word1 = (word1 >> 8) | (word2 << 24);
+        word2 >>= 8;
     }
 }

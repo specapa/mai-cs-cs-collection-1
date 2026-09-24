@@ -15,6 +15,16 @@ internal class SimpleMultiplier : IMultiplier
         ReadOnlySpan<uint> aDigits = a.GetDigits();
         ReadOnlySpan<uint> bDigits = b.GetDigits();
 
+        return new BetterBigInteger(MultiplyMagnitudes(aDigits, bDigits), isNegative);
+    }
+
+    internal static uint[] MultiplyMagnitudes(ReadOnlySpan<uint> aDigits, ReadOnlySpan<uint> bDigits)
+    {
+        if (aDigits.IsEmpty || bDigits.IsEmpty)
+        {
+            return [0];
+        }
+
         // Результат не длиннее суммы длин операндов
         uint[] result = new uint[aDigits.Length + bDigits.Length];
 
@@ -64,6 +74,6 @@ internal class SimpleMultiplier : IMultiplier
             result[i + bDigits.Length] = carry;
         }
 
-        return new BetterBigInteger(result, isNegative);
+        return result;
     }
 }
